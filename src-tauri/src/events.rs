@@ -26,9 +26,15 @@ pub enum SchedulerState {
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     // Scheduler
+    PreBreakPromptTick {
+        break_type: BreakType,
+        remaining_secs: u64,
+    },
+    PreBreakPromptHidden,
     BreakDue { break_type: BreakType },
     BreakCompleted,
     BreakSkipped,
+    BreakDeferred { secs: u64 },
     BreakSnoozed { secs: u64 },
     StateChanged(SchedulerState),
 

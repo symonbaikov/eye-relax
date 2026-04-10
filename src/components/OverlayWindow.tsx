@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriEvents } from "../hooks/useTauriEvents";
-import { lockScreen } from "../lib/ipc";
+import { suspendSystem } from "../lib/ipc";
 import { useSchedulerStore } from "../stores/useSchedulerStore";
 import { getConfig, getRemaining, getState } from "../lib/ipc";
+
+const DOUBLE_ESC_WINDOW_MS = 900;
 
 function CurrentTime() {
   const [time, setTime] = useState(new Date());
@@ -38,12 +40,18 @@ export default function OverlayWindow() {
   const isBreakActive = useSchedulerStore((s) => s.isBreakActive);
   const remaining = useSchedulerStore((s) => s.remaining);
   const skip = useSchedulerStore((s) => s.skip);
+  const skipsRemaining = useSchedulerStore((s) => s.skipsRemaining);
+  const skipLimit = useSchedulerStore((s) => s.skipLimit);
+  const refreshSkipAllowance = useSchedulerStore((s) => s.refreshSkipAllowance);
 
   const [visible, setVisible] = useState(false);
-  const [isLocking, setIsLocking] = useState(false);
-  const [lockError, setLockError] = useState<string | null>(null);
-  const [lockStatus, setLockStatus] = useState<string | null>(null);
+  const [isSuspending, setIsSuspending] = useState(false);
+  const [suspendError, setSuspendError] = useState<string | null>(null);
+  const [suspendStatus, setSuspendStatus] = useState<string | null>(null);
+  const [skipStatus, setSkipStatus] = useState<string | null>(null);
+  const [skipError, setSkipError] = useState<string | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEscAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (isBreakActive) {
@@ -82,51 +90,111 @@ export default function OverlayWindow() {
     return () => clearInterval(id);
   }, [startBreak, endBreak, setRemaining]);
 
+  useEffect(() => {
+    void refreshSkipAllowance();
+  }, [refreshSkipAllowance]);
+
   const prefersReducedMotion =
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const duration = prefersReducedMotion ? 0 : 3;
 
-  const handleLockScreen = async () => {
-    if (isLocking) return;
+  const handleSkipBreak = useCallback(async () => {
+    if (skipsRemaining <= 0) {
+      setSkipError(`Daily skip limit reached (${skipLimit} per day).`);
+      setSkipStatus(null);
+      return;
+    }
 
     try {
-      setIsLocking(true);
-      setLockError(null);
-      setLockStatus("Sending lock request...");
-      await lockScreen();
-      setLockStatus("Lock request sent");
+      setSkipError(null);
+      setSkipStatus("Skipping break...");
+      await skip();
+      setSkipStatus("Break skipped");
     } catch (error) {
-      console.error("Failed to lock screen:", error);
-      const message =
-        error && typeof error === "object" && "toString" in error
-          ? String(error)
-          : "Unable to lock the screen on this system.";
-      setLockError(message);
-      setLockStatus(null);
+      console.error("Failed to skip break:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      setSkipError(message);
+      setSkipStatus(null);
+    }
+  }, [skip, skipLimit, skipsRemaining]);
+
+  const handleSuspendSystem = async () => {
+    if (isSuspending) return;
+
+    try {
+      setIsSuspending(true);
+      setSuspendError(null);
+      setSuspendStatus("Sending suspend request...");
+      await suspendSystem();
+      setSuspendStatus("Suspend request sent");
+    } catch (error) {
+      console.error("Failed to suspend system:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      setSuspendError(message);
+      setSuspendStatus(null);
     } finally {
-      setIsLocking(false);
+      setIsSuspending(false);
     }
   };
 
   useEffect(() => {
-    if (!lockStatus) return;
-    const timeout = window.setTimeout(() => setLockStatus(null), 2500);
+    if (!suspendStatus) return;
+    const timeout = window.setTimeout(() => setSuspendStatus(null), 2500);
     return () => window.clearTimeout(timeout);
-  }, [lockStatus]);
+  }, [suspendStatus]);
+
+  useEffect(() => {
+    if (!skipStatus) return;
+    const timeout = window.setTimeout(() => setSkipStatus(null), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [skipStatus]);
+
+  useEffect(() => {
+    if (!isBreakActive) {
+      lastEscAtRef.current = null;
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      const now = Date.now();
+      const previous = lastEscAtRef.current;
+
+      if (previous && now - previous <= DOUBLE_ESC_WINDOW_MS) {
+        lastEscAtRef.current = null;
+        void handleSkipBreak();
+        return;
+      }
+
+      lastEscAtRef.current = now;
+      setSkipError(null);
+      setSkipStatus("Press Esc again to skip");
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleSkipBreak, isBreakActive]);
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden select-none relative font-sans flex flex-col items-center"
+      className="overlay-gradient-bg h-screen w-screen overflow-hidden select-none relative flex flex-col items-center"
       style={{
+        fontFamily: "'Nunito', sans-serif",
         opacity: visible ? 1 : 0,
         transition: `opacity ${duration}s ease-in-out`,
         pointerEvents: visible ? "auto" : "none",
-        background: "rgba(20, 30, 45, 0.6)",
         backdropFilter: "blur(20px)",
       }}
     >
-      <div className="absolute top-12 flex items-center gap-1.5 text-white/90 font-medium text-sm tracking-wide">
+      <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 mix-blend-screen opacity-50">
+        <div className="overlay-blob-1 absolute top-1/4 left-1/4 w-[30rem] h-[30rem] bg-fuchsia-400 rounded-full blur-[100px]" />
+        <div className="overlay-blob-2 absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-cyan-400 rounded-full blur-[120px]" />
+        <div className="overlay-blob-3 absolute bottom-1/4 left-1/3 w-[25rem] h-[25rem] bg-blue-500 rounded-full blur-[90px]" />
+      </div>
+
+      <div className="absolute top-12 flex items-center gap-1.5 text-white/90 font-medium text-sm tracking-wide z-10">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
@@ -144,40 +212,44 @@ export default function OverlayWindow() {
         <CurrentTime />
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center -mt-16 w-full">
-        <h1 className="text-white font-bold tracking-tight mb-4" style={{ fontSize: "52px" }}>
+      <div className="flex-1 flex flex-col items-center justify-center -mt-16 w-full z-10">
+        <h1 className="text-white font-extrabold tracking-tight mb-4" style={{ fontSize: "56px" }}>
           Eyes to the horizon
         </h1>
 
-        <p className="text-white/90 text-xl font-medium mb-10 text-center tracking-wide">
+        <p className="text-white/90 text-xl font-bold mb-10 text-center tracking-wide">
           Set your eyes on something distant until the countdown is over
         </p>
 
-        <div className="w-24 h-[1px] bg-white/30 mb-8 rounded-full"></div>
+        <div className="w-24 h-[3px] bg-white/40 mb-8 rounded-full"></div>
 
         <div
-          className="font-bold tracking-wider tabular-nums"
+          className="font-black tracking-wider tabular-nums"
           style={{
-            fontSize: "64px",
-            color: "#A5D8FF",
-            textShadow: "0 0 30px rgba(165, 216, 255, 0.4)",
+            fontSize: "72px",
+            color: "white",
+            textShadow: "0 0 30px rgba(255, 255, 255, 0.5)",
           }}
         >
           <TimeDisplay remaining={remaining} />
         </div>
       </div>
 
-      <div className="absolute bottom-16 flex flex-col items-center gap-4">
+      <div className="absolute bottom-16 flex flex-col items-center gap-4 z-10">
         <div className="flex gap-4">
           <button
-            onClick={() => void skip()}
+            onClick={() => {
+              void handleSkipBreak();
+            }}
             className="flex items-center gap-2 px-6 py-3 rounded-full font-semibold text-sm cursor-pointer border border-white/20 transition-all hover:bg-white/20 active:bg-white/30"
             style={{
               background: "rgba(30, 60, 100, 0.5)",
               color: "white",
               backdropFilter: "blur(10px)",
               boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+              opacity: skipsRemaining <= 0 ? 0.55 : 1,
             }}
+            disabled={skipsRemaining <= 0}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -198,16 +270,16 @@ export default function OverlayWindow() {
 
           <button
             onClick={() => {
-              void handleLockScreen();
+              void handleSuspendSystem();
             }}
-            disabled={isLocking}
+            disabled={isSuspending}
             className="flex items-center gap-2 px-6 py-3 rounded-full font-semibold text-sm cursor-pointer border border-white/20 transition-all hover:bg-white/20 active:bg-white/30"
             style={{
               background: "rgba(30, 50, 90, 0.5)",
               color: "white",
               backdropFilter: "blur(10px)",
               boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-              opacity: isLocking ? 0.7 : 1,
+              opacity: isSuspending ? 0.7 : 1,
             }}
           >
             <svg
@@ -224,18 +296,30 @@ export default function OverlayWindow() {
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
             </svg>
-            {isLocking ? "Locking..." : "Lock Screen"}
+            {isSuspending ? "Suspending..." : "Suspend"}
           </button>
         </div>
 
         <div className="text-center flex flex-col gap-1.5 mt-2">
-          {lockStatus ? (
-            <p className="text-[11px] font-medium text-sky-200/90">{lockStatus}</p>
+          {skipStatus ? (
+            <p className="text-[11px] font-medium text-sky-200/90">{skipStatus}</p>
           ) : null}
-          {lockError ? (
-            <p className="max-w-sm text-[11px] font-medium text-amber-200/90">{lockError}</p>
+          {skipError ? (
+            <p className="max-w-md text-[11px] leading-5 font-medium text-amber-200/90">
+              {skipError}
+            </p>
           ) : null}
-          <p className="text-white/50 text-xs font-medium">4 snoozes available</p>
+          {suspendStatus ? (
+            <p className="text-[11px] font-medium text-sky-200/90">{suspendStatus}</p>
+          ) : null}
+          {suspendError ? (
+            <p className="max-w-md text-[11px] leading-5 font-medium text-amber-200/90">
+              {suspendError}
+            </p>
+          ) : null}
+          <p className="text-white/50 text-xs font-medium">
+            {skipsRemaining} of {skipLimit} skips left today
+          </p>
           <p className="text-white/50 text-xs font-medium flex items-center gap-1.5 justify-center">
             Press{" "}
             <kbd className="px-1.5 py-0.5 rounded bg-white/10 border border-white/20 font-sans text-[10px] text-white/80">

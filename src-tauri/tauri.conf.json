@@ -23,8 +23,27 @@
         "backgroundColor": "#0f0c29",
         "visible": false,
         "fullscreen": true,
+        "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "focus": true
+      },
+      {
+        "label": "prompt",
+        "title": "Blinkly — Upcoming Break",
+        "width": 460,
+        "height": 124,
+        "minWidth": 460,
+        "minHeight": 124,
+        "maxWidth": 460,
+        "maxHeight": 124,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "center": false,
+        "skipTaskbar": true,
+        "focus": false
       },
       {
         "label": "settings",
@@ -52,7 +71,8 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.png"
     ]
   }
 }

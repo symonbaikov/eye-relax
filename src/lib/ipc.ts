@@ -33,20 +33,34 @@ export const setConfig = (config: AppConfig): Promise<void> =>
 
 export type SchedulerState = "idle" | "working" | "on_break" | "paused";
 
+export interface SkipAllowance {
+  used: number;
+  remaining: number;
+  limit: number;
+}
+
 export const getState = (): Promise<SchedulerState> => invoke<SchedulerState>("get_state");
 
 export const getRemaining = (): Promise<number> => invoke<number>("get_remaining");
 
 export const skipBreak = (): Promise<void> => invoke<void>("skip_break");
 
+export const getSkipAllowance = (): Promise<SkipAllowance> =>
+  invoke<SkipAllowance>("get_skip_allowance");
+
 export const snoozeBreak = (durationSecs: number): Promise<void> =>
   invoke<void>("snooze_break", { duration_secs: durationSecs });
+
+export const deferBreak = (durationSecs: number): Promise<void> =>
+  invoke<void>("defer_break", { duration_secs: durationSecs });
 
 export const pauseTimer = (): Promise<void> => invoke<void>("pause_timer");
 
 export const resumeTimer = (): Promise<void> => invoke<void>("resume_timer");
 
 export const lockScreen = (): Promise<void> => invoke<void>("lock_screen");
+
+export const suspendSystem = (): Promise<void> => invoke<void>("suspend_system");
 
 // ---------------------------------------------------------------------------
 // Stats commands

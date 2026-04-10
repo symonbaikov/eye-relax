@@ -1,9 +1,11 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::AppConfig;
 use crate::events::{AppEvent, BreakType, EventBus, SchedulerState};
+
+const PRE_BREAK_PROMPT_SECS: u64 = 32;
 
 // ---------------------------------------------------------------------------
 // Port (trait)
@@ -14,6 +16,7 @@ use crate::events::{AppEvent, BreakType, EventBus, SchedulerState};
 pub trait SchedulerPort: Send + Sync {
     fn start(&self);
     fn force_break(&self);
+    fn defer_break(&self, duration: Duration);
     fn skip(&self);
     fn snooze(&self, duration: Duration);
     fn pause(&self);
@@ -36,6 +39,8 @@ struct SchedulerInner {
     /// Cancel flag for the currently running timer task.
     /// Set to `true` to signal the task to stop at the next sleep boundary.
     task: Option<Arc<AtomicBool>>,
+    /// Break type determined for the current work cycle once the prompt appears.
+    pending_break_type: Option<BreakType>,
 }
 
 impl SchedulerInner {
@@ -46,6 +51,7 @@ impl SchedulerInner {
             work_cycles: 0,
             config,
             task: None,
+            pending_break_type: None,
         }
     }
 
@@ -80,6 +86,7 @@ impl SchedulerInner {
 pub struct TimerScheduler {
     inner: Arc<Mutex<SchedulerInner>>,
     bus: Arc<EventBus>,
+    prompt_remaining_secs: Arc<AtomicU64>,
 }
 
 impl TimerScheduler {
@@ -87,6 +94,7 @@ impl TimerScheduler {
         let scheduler = Arc::new(TimerScheduler {
             inner: Arc::new(Mutex::new(SchedulerInner::new(config))),
             bus: Arc::clone(&bus),
+            prompt_remaining_secs: Arc::new(AtomicU64::new(0)),
         });
 
         // Subscribe to bus events (UserIdle, UserReturned, ConfigUpdated).
@@ -98,6 +106,7 @@ impl TimerScheduler {
     fn spawn_bus_listener(&self, bus: Arc<EventBus>) {
         let inner = Arc::clone(&self.inner);
         let bus_for_task = Arc::clone(&bus);
+        let prompt_remaining_secs = Arc::clone(&self.prompt_remaining_secs);
         let mut rx = bus.subscribe();
 
         crate::spawn_async(async move {
@@ -109,7 +118,9 @@ impl TimerScheduler {
                             g.abort_task();
                             g.state = SchedulerState::Idle;
                             g.remaining_secs = g.config.work_interval_secs;
+                            g.pending_break_type = None;
                             tracing::info!("State transition: Working → Idle (user idle)");
+                            Self::hide_prompt(&bus_for_task, &prompt_remaining_secs);
                             bus_for_task.emit(AppEvent::StateChanged(SchedulerState::Idle));
                         }
                     }
@@ -119,7 +130,7 @@ impl TimerScheduler {
                             g.state == SchedulerState::Idle
                         };
                         if should_start {
-                            Self::do_start_working(&inner, &bus_for_task);
+                            Self::do_start_working(&inner, &bus_for_task, &prompt_remaining_secs);
                         }
                     }
                     Ok(AppEvent::ConfigUpdated(cfg)) => {
@@ -130,8 +141,14 @@ impl TimerScheduler {
                             g.abort_task();
                             let remaining = g.config.work_interval_secs;
                             g.remaining_secs = remaining;
+                            g.pending_break_type = None;
                             drop(g);
-                            Self::spawn_work_task(&inner, &bus_for_task, remaining);
+                            Self::spawn_work_task(
+                                &inner,
+                                &bus_for_task,
+                                &prompt_remaining_secs,
+                                remaining,
+                            );
                             tracing::info!("Config updated — work timer restarted");
                         }
                     }
@@ -149,32 +166,49 @@ impl TimerScheduler {
     // Helpers used from both the scheduler methods and the bus listener
     // -----------------------------------------------------------------------
 
-    fn do_start_break(inner: &Arc<Mutex<SchedulerInner>>, bus: &Arc<EventBus>) {
+    fn hide_prompt(bus: &Arc<EventBus>, prompt_remaining_secs: &Arc<AtomicU64>) {
+        if prompt_remaining_secs.swap(0, Ordering::Relaxed) != 0 {
+            bus.emit(AppEvent::PreBreakPromptHidden);
+        }
+    }
+
+    fn do_start_break(
+        inner: &Arc<Mutex<SchedulerInner>>,
+        bus: &Arc<EventBus>,
+        prompt_remaining_secs: &Arc<AtomicU64>,
+        break_type: Option<BreakType>,
+    ) {
         let (break_type, break_secs) = {
             let mut g = inner.lock().unwrap();
             g.abort_task();
-            let bt = g.next_break_type();
+            let bt = break_type
+                .or_else(|| g.pending_break_type.clone())
+                .unwrap_or_else(|| g.next_break_type());
             g.work_cycles += 1;
             let secs = g.break_duration(&bt);
             g.state = SchedulerState::OnBreak;
             g.remaining_secs = secs;
+            g.pending_break_type = None;
             (bt, secs)
         };
+        Self::hide_prompt(bus, prompt_remaining_secs);
         tracing::info!("State transition: → OnBreak (forced, {break_type:?})");
         bus.emit(AppEvent::StateChanged(SchedulerState::OnBreak));
         bus.emit(AppEvent::BreakDue { break_type });
-        Self::spawn_break_task(inner, bus, break_secs);
+        Self::spawn_break_task(inner, bus, prompt_remaining_secs, break_secs);
     }
 
     fn spawn_break_task(
         inner: &Arc<Mutex<SchedulerInner>>,
         bus: &Arc<EventBus>,
+        prompt_remaining_secs: &Arc<AtomicU64>,
         break_secs: u64,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_t = Arc::clone(&cancel);
         let inner_t = Arc::clone(inner);
         let bus_t = Arc::clone(bus);
+        let prompt_remaining_t = Arc::clone(prompt_remaining_secs);
 
         crate::spawn_async(async move {
             for remaining in (0..break_secs).rev() {
@@ -194,41 +228,51 @@ impl TimerScheduler {
                 g.state = SchedulerState::Working;
                 let r = g.config.work_interval_secs;
                 g.remaining_secs = r;
+                g.pending_break_type = None;
                 r
             };
 
+            Self::hide_prompt(&bus_t, &prompt_remaining_t);
             tracing::info!("State transition: OnBreak → Working (break completed)");
             bus_t.emit(AppEvent::BreakCompleted);
             bus_t.emit(AppEvent::StateChanged(SchedulerState::Working));
-            Self::spawn_work_task(&inner_t, &bus_t, next_work_secs);
+            Self::spawn_work_task(&inner_t, &bus_t, &prompt_remaining_t, next_work_secs);
         });
 
         inner.lock().unwrap().task = Some(cancel);
     }
 
-    fn do_start_working(inner: &Arc<Mutex<SchedulerInner>>, bus: &Arc<EventBus>) {
+    fn do_start_working(
+        inner: &Arc<Mutex<SchedulerInner>>,
+        bus: &Arc<EventBus>,
+        prompt_remaining_secs: &Arc<AtomicU64>,
+    ) {
         let remaining = {
             let mut g = inner.lock().unwrap();
             g.abort_task();
             g.state = SchedulerState::Working;
             let r = g.config.work_interval_secs;
             g.remaining_secs = r;
+            g.pending_break_type = None;
             r
         };
+        Self::hide_prompt(bus, prompt_remaining_secs);
         tracing::info!("State transition: → Working");
         bus.emit(AppEvent::StateChanged(SchedulerState::Working));
-        Self::spawn_work_task(inner, bus, remaining);
+        Self::spawn_work_task(inner, bus, prompt_remaining_secs, remaining);
     }
 
     fn spawn_work_task(
         inner: &Arc<Mutex<SchedulerInner>>,
         bus: &Arc<EventBus>,
+        prompt_remaining_secs: &Arc<AtomicU64>,
         work_secs: u64,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_t = Arc::clone(&cancel);
         let inner_t = Arc::clone(inner);
         let bus_t = Arc::clone(bus);
+        let prompt_remaining_t = Arc::clone(prompt_remaining_secs);
 
         crate::spawn_async(async move {
             // --- Work countdown ---
@@ -237,7 +281,32 @@ impl TimerScheduler {
                     return;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                inner_t.lock().unwrap().remaining_secs = remaining;
+                let maybe_break_type = {
+                    let mut g = inner_t.lock().unwrap();
+                    g.remaining_secs = remaining;
+
+                    if remaining <= PRE_BREAK_PROMPT_SECS {
+                        let break_type = g.pending_break_type.clone().unwrap_or_else(|| {
+                            let next = g.next_break_type();
+                            g.pending_break_type = Some(next.clone());
+                            next
+                        });
+                        Some(break_type)
+                    } else {
+                        g.pending_break_type = None;
+                        None
+                    }
+                };
+
+                if let Some(break_type) = maybe_break_type {
+                    prompt_remaining_t.store(remaining, Ordering::Relaxed);
+                    bus_t.emit(AppEvent::PreBreakPromptTick {
+                        break_type,
+                        remaining_secs: remaining,
+                    });
+                } else {
+                    Self::hide_prompt(&bus_t, &prompt_remaining_t);
+                }
             }
             if cancel_t.load(Ordering::Relaxed) {
                 return;
@@ -246,18 +315,20 @@ impl TimerScheduler {
             // --- Transition to break ---
             let (break_type, break_secs) = {
                 let mut g = inner_t.lock().unwrap();
-                let bt = g.next_break_type();
+                let bt = g.pending_break_type.clone().unwrap_or_else(|| g.next_break_type());
                 g.work_cycles += 1;
                 let secs = g.break_duration(&bt);
                 g.state = SchedulerState::OnBreak;
                 g.remaining_secs = secs;
+                g.pending_break_type = None;
                 (bt, secs)
             };
 
+            Self::hide_prompt(&bus_t, &prompt_remaining_t);
             tracing::info!("State transition: Working → OnBreak ({break_type:?})");
             bus_t.emit(AppEvent::StateChanged(SchedulerState::OnBreak));
             bus_t.emit(AppEvent::BreakDue { break_type });
-            Self::spawn_break_task(&inner_t, &bus_t, break_secs);
+            Self::spawn_break_task(&inner_t, &bus_t, &prompt_remaining_t, break_secs);
         });
 
         inner.lock().unwrap().task = Some(cancel);
@@ -273,7 +344,7 @@ impl SchedulerPort for TimerScheduler {
             return;
         }
         tracing::info!("State transition: Idle → Working");
-        Self::do_start_working(&self.inner, &self.bus);
+        Self::do_start_working(&self.inner, &self.bus, &self.prompt_remaining_secs);
     }
 
     /// Force an immediate break regardless of current state.
@@ -284,7 +355,31 @@ impl SchedulerPort for TimerScheduler {
             return;
         }
         tracing::info!("Force break requested");
-        Self::do_start_break(&self.inner, &self.bus);
+        Self::do_start_break(&self.inner, &self.bus, &self.prompt_remaining_secs, None);
+    }
+
+    fn defer_break(&self, duration: Duration) {
+        let secs = duration.as_secs();
+        let current = self.inner.lock().unwrap().state.clone();
+        if current != SchedulerState::Working {
+            tracing::debug!("defer_break() called in state {current:?} — no-op");
+            return;
+        }
+
+        tracing::info!("State transition: Working → Working (deferred {secs}s)");
+        self.bus.emit(AppEvent::BreakDeferred { secs });
+
+        {
+            let mut g = self.inner.lock().unwrap();
+            g.abort_task();
+            g.state = SchedulerState::Working;
+            g.remaining_secs = secs;
+            g.pending_break_type = None;
+        }
+
+        Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
+        self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
+        Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, secs);
     }
 
     /// Skip the current break. No-op if not OnBreak.
@@ -296,7 +391,7 @@ impl SchedulerPort for TimerScheduler {
         }
         tracing::info!("State transition: OnBreak → Working (skipped)");
         self.bus.emit(AppEvent::BreakSkipped);
-        Self::do_start_working(&self.inner, &self.bus);
+        Self::do_start_working(&self.inner, &self.bus, &self.prompt_remaining_secs);
     }
 
     /// Snooze the current break. No-op if not OnBreak.
@@ -315,9 +410,11 @@ impl SchedulerPort for TimerScheduler {
             g.abort_task();
             g.state = SchedulerState::Working;
             g.remaining_secs = secs;
+            g.pending_break_type = None;
         }
+        Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
         self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
-        Self::spawn_work_task(&self.inner, &self.bus, secs);
+        Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, secs);
     }
 
     /// Pause the scheduler. No-op if not Working.
@@ -330,6 +427,8 @@ impl SchedulerPort for TimerScheduler {
         self.inner.lock().unwrap().abort_task();
         self.inner.lock().unwrap().state = SchedulerState::Paused;
         tracing::info!("State transition: Working → Paused");
+        Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
+        self.inner.lock().unwrap().pending_break_type = None;
         self.bus.emit(AppEvent::StateChanged(SchedulerState::Paused));
     }
 
@@ -343,10 +442,14 @@ impl SchedulerPort for TimerScheduler {
             tracing::debug!("resume() called in state {current:?} — no-op");
             return;
         }
-        self.inner.lock().unwrap().state = SchedulerState::Working;
+        {
+            let mut g = self.inner.lock().unwrap();
+            g.state = SchedulerState::Working;
+            g.pending_break_type = None;
+        }
         tracing::info!("State transition: Paused → Working");
         self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
-        Self::spawn_work_task(&self.inner, &self.bus, remaining);
+        Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, remaining);
     }
 
     fn state(&self) -> SchedulerState {
@@ -499,11 +602,24 @@ mod tests {
         time::advance(Duration::from_secs(5)).await;
         tokio::task::yield_now().await;
 
-        // Expect StateChanged(OnBreak) + BreakDue
-        let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::OnBreak)));
-        let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::BreakDue { break_type: BreakType::Short }));
+        let mut saw_on_break = false;
+        let mut saw_break_due = false;
+        for _ in 0..8 {
+            let ev = rx.recv().await.unwrap();
+            match ev {
+                AppEvent::StateChanged(SchedulerState::OnBreak) => saw_on_break = true,
+                AppEvent::BreakDue {
+                    break_type: BreakType::Short,
+                } => {
+                    saw_break_due = true;
+                    break;
+                }
+                AppEvent::PreBreakPromptTick { .. } | AppEvent::PreBreakPromptHidden => {}
+                other => panic!("unexpected event before break: {other:?}"),
+            }
+        }
+        assert!(saw_on_break);
+        assert!(saw_break_due);
 
         // Advance past the 2s break
         time::advance(Duration::from_secs(3)).await;
@@ -537,8 +653,15 @@ mod tests {
         time::advance(Duration::from_secs(5)).await;
         tokio::task::yield_now().await;
 
-        rx.recv().await.unwrap(); // StateChanged(OnBreak)
-        rx.recv().await.unwrap(); // BreakDue
+        let mut reached_break = false;
+        for _ in 0..8 {
+            let ev = rx.recv().await.unwrap();
+            if matches!(ev, AppEvent::BreakDue { .. }) {
+                reached_break = true;
+                break;
+            }
+        }
+        assert!(reached_break);
 
         assert_eq!(sched.state(), SchedulerState::OnBreak);
         sched.skip();
@@ -564,8 +687,15 @@ mod tests {
         time::advance(Duration::from_secs(5)).await;
         tokio::task::yield_now().await;
 
-        rx.recv().await.unwrap(); // StateChanged(OnBreak)
-        rx.recv().await.unwrap(); // BreakDue
+        let mut reached_break = false;
+        for _ in 0..8 {
+            let ev = rx.recv().await.unwrap();
+            if matches!(ev, AppEvent::BreakDue { .. }) {
+                reached_break = true;
+                break;
+            }
+        }
+        assert!(reached_break);
 
         sched.snooze(Duration::from_secs(3));
 
@@ -616,9 +746,20 @@ mod tests {
         // Cycle 1: short break
         time::advance(Duration::from_secs(3)).await;
         tokio::task::yield_now().await;
-        rx.recv().await.unwrap(); // StateChanged(OnBreak)
-        let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::BreakDue { break_type: BreakType::Short }));
+        let mut saw_short_due = false;
+        for _ in 0..6 {
+            let ev = rx.recv().await.unwrap();
+            if matches!(
+                ev,
+                AppEvent::BreakDue {
+                    break_type: BreakType::Short,
+                }
+            ) {
+                saw_short_due = true;
+                break;
+            }
+        }
+        assert!(saw_short_due);
 
         // Finish cycle 1 break
         time::advance(Duration::from_secs(2)).await;
@@ -632,8 +773,65 @@ mod tests {
         // Cycle 2: long break
         time::advance(Duration::from_secs(3)).await;
         tokio::task::yield_now().await;
-        rx.recv().await.unwrap(); // StateChanged(OnBreak)
+        let mut saw_long_due = false;
+        for _ in 0..6 {
+            let ev = rx.recv().await.unwrap();
+            if matches!(
+                ev,
+                AppEvent::BreakDue {
+                    break_type: BreakType::Long,
+                }
+            ) {
+                saw_long_due = true;
+                break;
+            }
+        }
+        assert!(saw_long_due);
+    }
+
+    #[tokio::test]
+    async fn scheduler_emits_prompt_before_break_and_can_defer() {
+        time::pause();
+        let cfg = AppConfig {
+            work_interval_secs: 35,
+            break_duration_secs: 2,
+            long_break_interval_secs: 70,
+            long_break_duration_secs: 4,
+            ..AppConfig::default()
+        };
+        let (sched, bus) = make(cfg);
+        let mut rx = bus.subscribe();
+
+        sched.start();
+        rx.recv().await.unwrap(); // StateChanged(Working)
+
+        time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+
+        let mut saw_prompt = false;
+        for _ in 0..4 {
+            let ev = rx.recv().await.unwrap();
+            if matches!(
+                ev,
+                AppEvent::PreBreakPromptTick {
+                    break_type: BreakType::Short,
+                    remaining_secs: 31
+                }
+            ) {
+                saw_prompt = true;
+                break;
+            }
+        }
+        assert!(saw_prompt);
+
+        sched.defer_break(Duration::from_secs(60));
+
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::BreakDue { break_type: BreakType::Long }));
+        assert!(matches!(ev, AppEvent::BreakDeferred { secs: 60 }));
+        let ev = rx.recv().await.unwrap();
+        assert!(matches!(ev, AppEvent::PreBreakPromptHidden));
+        let ev = rx.recv().await.unwrap();
+        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert_eq!(sched.remaining_secs(), 60);
     }
 }

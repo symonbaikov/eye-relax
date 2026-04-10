@@ -4,19 +4,40 @@ pub mod config;
 pub mod events;
 pub mod notifications;
 pub mod overlay;
+pub mod prompt;
 pub mod platform;
+pub mod power;
 pub mod scheduler;
 pub mod screen_lock;
 pub mod stats;
 pub mod storage;
 pub mod tray;
+pub mod x11_grab;
 
 use std::sync::Arc;
 
 use config::ConfigManager;
 use events::EventBus;
+use scheduler::{SchedulerPort, TimerScheduler};
 use storage::SqliteStorage;
-use tauri::Manager;
+use tauri::{image::Image, Manager, Runtime};
+
+const APP_ICON: &[u8] = include_bytes!("../icons/icon.png");
+
+fn apply_window_icons<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Ok(icon) = Image::from_bytes(APP_ICON) else {
+        tracing::warn!("Failed to load application icon for windows");
+        return;
+    };
+
+    for label in ["overlay", "prompt", "settings"] {
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(error) = window.set_icon(icon.clone()) {
+                tracing::warn!("Failed to apply icon to window '{label}': {error}");
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Runtime-agnostic spawn helper
@@ -71,6 +92,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            apply_window_icons(app.handle());
+
             // Everything that calls tokio::spawn must run here, inside the
             // Tauri-managed Tokio runtime.
 
@@ -94,7 +117,6 @@ pub fn run() {
             );
 
             // Scheduler
-            use scheduler::{SchedulerPort, TimerScheduler};
             let scheduler = TimerScheduler::new(Arc::clone(&bus), config_manager.current());
             scheduler.start();
 
@@ -123,6 +145,7 @@ pub fn run() {
 
             // Overlay listener
             overlay::spawn_overlay_listener(app.handle().clone(), Arc::clone(&bus));
+            prompt::spawn_prompt_listener(app.handle().clone(), Arc::clone(&bus));
 
             // Register managed state (accessible to IPC commands)
             app.manage(Arc::clone(&config_manager));
@@ -132,6 +155,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "overlay"
+                && matches!(event, tauri::WindowEvent::Focused(false))
+                && window
+                    .try_state::<Arc<TimerScheduler>>()
+                    .map(|scheduler| scheduler.state() == events::SchedulerState::OnBreak)
+                    .unwrap_or(false)
+            {
+                let overlay = window.clone();
+                crate::spawn_async(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    let _ = overlay.set_focus();
+                });
+            }
+
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Hide the window instead of destroying it so it can be
                 // reopened from the tray without recreating it.
@@ -149,9 +186,12 @@ pub fn run() {
             commands::get_remaining,
             commands::skip_break,
             commands::snooze_break,
+            commands::defer_break,
             commands::pause_timer,
             commands::resume_timer,
             commands::lock_screen,
+            commands::suspend_system,
+            commands::get_skip_allowance,
             commands::get_stats,
         ])
         .run(tauri::generate_context!())

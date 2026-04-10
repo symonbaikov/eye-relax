@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 use tokio::sync::broadcast;
 
 use crate::events::{AppEvent, BreakType, EventBus};
+use crate::x11_grab;
 
 const OVERLAY_LABEL: &str = "overlay";
 
@@ -46,13 +47,41 @@ pub fn spawn_overlay_listener<R: Runtime>(app: AppHandle<R>, bus: Arc<EventBus>)
                     };
 
                     if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
+                        let _ = window.set_visible_on_all_workspaces(true);
                         let _ = window.show();
                         let _ = window.set_focus();
 
                         let window = window.clone();
                         crate::spawn_async(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            let _ = window.set_focus();
+                            let mut grab_error = None;
+
+                            for delay in [0_u64, 120, 350, 800, 1400] {
+                                if delay > 0 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                                }
+
+                                let _ = window.set_focus();
+
+                                match x11_grab::try_grab_keyboard_for_overlay(&window) {
+                                    Ok(true) => {
+                                        grab_error = None;
+                                        break;
+                                    }
+                                    Ok(false) => break,
+                                    Err(error) => {
+                                        grab_error = Some(error.to_string());
+                                    }
+                                }
+                            }
+
+                            if let Some(error) = grab_error {
+                                tracing::warn!(error, "Overlay: failed to grab keyboard on X11");
+                            }
+
+                            for delay in [120_u64, 350, 800, 1400] {
+                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                                let _ = window.set_focus();
+                            }
                         });
                     }
                     // Also emit event for immediate update (best-effort).
@@ -81,6 +110,9 @@ pub fn spawn_overlay_listener<R: Runtime>(app: AppHandle<R>, bus: Arc<EventBus>)
                     tokio::time::sleep(std::time::Duration::from_millis(3200)).await;
                     if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
                         let _ = window.hide();
+                    }
+                    if let Err(error) = x11_grab::release_keyboard_for_overlay() {
+                        tracing::warn!(error = %error, "Overlay: failed to release keyboard grab");
                     }
                     tracing::info!("Overlay: hidden");
                 }

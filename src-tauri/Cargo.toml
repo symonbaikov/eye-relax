@@ -37,6 +37,7 @@ wayland-protocols = { version = "0.31", features = ["client", "unstable"] }
 zbus = { version = "4", features = ["blocking"] }
 anyhow = "1"
 notify-rust = "4"
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 tempfile = "3"

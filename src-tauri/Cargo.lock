@@ -286,6 +286,7 @@ dependencies = [
  "chrono",
  "dirs",
  "notify-rust",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",

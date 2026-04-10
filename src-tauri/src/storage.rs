@@ -68,6 +68,12 @@ pub trait StoragePort: Send + Sync {
     fn record_break(&self, record: &BreakRecord) -> Result<()>;
     fn upsert_session(&self, session: &Session) -> Result<()>;
     fn get_today_session(&self, date: &str) -> Result<Option<Session>>;
+    fn count_breaks_by_status(
+        &self,
+        start_inclusive: &str,
+        end_exclusive: &str,
+        status: &str,
+    ) -> Result<u32>;
     fn get_stats(&self, range: &DateRange) -> Result<Vec<DayStat>>;
 }
 
@@ -83,8 +89,7 @@ impl SqliteStorage {
     /// Open (or create) the database at `path` and run pending migrations.
     pub fn new(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| StorageError::Io(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| StorageError::Io(e.to_string()))?;
         }
 
         let conn = Connection::open(path)?;
@@ -100,8 +105,7 @@ impl SqliteStorage {
 
     fn migrate(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let version: i32 =
-            conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
 
         if version < 1 {
             migrate_v0_to_v1(&conn)?;
@@ -236,6 +240,22 @@ impl StoragePort for SqliteStorage {
         }
     }
 
+    fn count_breaks_by_status(
+        &self,
+        start_inclusive: &str,
+        end_exclusive: &str,
+        status: &str,
+    ) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.query_row(
+            "SELECT COUNT(*) FROM breaks
+             WHERE status = ?1 AND started_at >= ?2 AND started_at < ?3",
+            params![status, start_inclusive, end_exclusive],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count as u32)
+    }
+
     fn get_stats(&self, range: &DateRange) -> Result<Vec<DayStat>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -270,8 +290,8 @@ pub mod mock {
     pub struct MockStorage {
         pub config: Mutex<AppConfig>,
         pub save_count: Mutex<u32>,
-        pub sessions: Mutex<HashMap<String, Session>>,    // id → Session
-        pub breaks: Mutex<HashMap<String, BreakRecord>>,   // id → BreakRecord
+        pub sessions: Mutex<HashMap<String, Session>>, // id → Session
+        pub breaks: Mutex<HashMap<String, BreakRecord>>, // id → BreakRecord
     }
 
     impl MockStorage {
@@ -339,6 +359,26 @@ pub mod mock {
                 .collect();
             stats.sort_by(|a, b| a.date.cmp(&b.date));
             Ok(stats)
+        }
+
+        fn count_breaks_by_status(
+            &self,
+            start_inclusive: &str,
+            end_exclusive: &str,
+            status: &str,
+        ) -> Result<u32> {
+            let count = self
+                .breaks
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|record| {
+                    record.status == status
+                        && record.started_at.as_str() >= start_inclusive
+                        && record.started_at.as_str() < end_exclusive
+                })
+                .count();
+            Ok(count as u32)
         }
     }
 }
@@ -419,7 +459,11 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(stats.len(), 1, "two upserts with same ID should yield 1 row");
+        assert_eq!(
+            stats.len(),
+            1,
+            "two upserts with same ID should yield 1 row"
+        );
         assert_eq!(stats[0].break_count, 3);
     }
 
@@ -436,6 +480,9 @@ mod tests {
             })
             .unwrap();
 
-        assert!(stats.is_empty(), "empty range should return empty vec, not error");
+        assert!(
+            stats.is_empty(),
+            "empty range should return empty vec, not error"
+        );
     }
 }
