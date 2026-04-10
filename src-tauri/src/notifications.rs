@@ -13,6 +13,8 @@ use crate::events::{AppEvent, EventBus};
 pub trait NotificationPort: Send + Sync {
     /// Show (or replace) the break notification.
     fn send_break(&self, title: &str, body: &str);
+    /// Show a product or release notification.
+    fn send_update(&self, title: &str, body: &str);
     /// Close the current notification (if any).
     fn close(&self);
 }
@@ -34,12 +36,9 @@ impl DbusNotifier {
             last_id: Mutex::new(0),
         })
     }
-}
 
-impl NotificationPort for DbusNotifier {
-    fn send_break(&self, title: &str, body: &str) {
+    fn send_notification(&self, title: &str, body: &str, actions: Vec<&str>, timeout: i32) {
         let replaces_id: u32 = *self.last_id.lock().unwrap();
-        let actions: Vec<&str> = vec!["skip", "Skip", "snooze", "Snooze 5m"];
         let hints: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
 
         match self.conn.call_method(
@@ -55,7 +54,7 @@ impl NotificationPort for DbusNotifier {
                 body,
                 actions,
                 hints,
-                5000i32,
+                timeout,
             ),
         ) {
             Ok(reply) => {
@@ -63,10 +62,25 @@ impl NotificationPort for DbusNotifier {
                     *self.last_id.lock().unwrap() = new_id;
                 }
             }
-            Err(e) => {
-                tracing::warn!("DbusNotifier: send failed: {e}");
+            Err(error) => {
+                tracing::warn!("DbusNotifier: send failed: {error}");
             }
         }
+    }
+}
+
+impl NotificationPort for DbusNotifier {
+    fn send_break(&self, title: &str, body: &str) {
+        self.send_notification(
+            title,
+            body,
+            vec!["skip", "Skip", "snooze", "Snooze 5m"],
+            5000,
+        );
+    }
+
+    fn send_update(&self, title: &str, body: &str) {
+        self.send_notification(title, body, Vec::new(), 8000);
     }
 
     fn close(&self) {
@@ -125,6 +139,26 @@ impl NotificationPort for LibnotifyNotifier {
             }
             Err(e) => {
                 tracing::warn!("LibnotifyNotifier: send failed: {e}");
+            }
+        }
+    }
+
+    fn send_update(&self, title: &str, body: &str) {
+        let prev_id = *self.last_id.lock().unwrap();
+
+        let mut notif = notify_rust::Notification::new();
+        notif.summary(title).body(body).timeout(8000);
+
+        if prev_id > 0 {
+            notif.id(prev_id);
+        }
+
+        match notif.show() {
+            Ok(handle) => {
+                *self.last_id.lock().unwrap() = handle.id();
+            }
+            Err(error) => {
+                tracing::warn!("LibnotifyNotifier: send failed: {error}");
             }
         }
     }
@@ -224,8 +258,25 @@ impl NotificationPort for MockNotifier {
         *self.last_id.lock().unwrap() = new_id;
     }
 
+    fn send_update(&self, title: &str, body: &str) {
+        self.send_break(title, body);
+    }
+
     fn close(&self) {
         *self.last_id.lock().unwrap() = 0;
+    }
+}
+
+pub fn create_system_notifier() -> Arc<dyn NotificationPort> {
+    match DbusNotifier::new() {
+        Ok(notifier) => {
+            tracing::info!("Using DbusNotifier for system notifications");
+            Arc::new(notifier)
+        }
+        Err(error) => {
+            tracing::warn!("DbusNotifier unavailable ({error}), falling back to LibnotifyNotifier");
+            Arc::new(LibnotifyNotifier::new())
+        }
     }
 }
 

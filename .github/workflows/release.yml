@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Pre-release tests
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate version consistency
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAURI_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          NPM_VERSION=$(jq -r '.version' package.json)
+
+          if [ "$TAG_VERSION" != "$TAURI_VERSION" ]; then
+            echo "ERROR: Tag version $TAG_VERSION does not match src-tauri/tauri.conf.json version $TAURI_VERSION"
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$NPM_VERSION" ]; then
+            echo "ERROR: Tag version $TAG_VERSION does not match package.json version $NPM_VERSION"
+            exit 1
+          fi
+
+          echo "Version $TAG_VERSION is consistent across release inputs"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            file \
+            jq \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --all-targets
+
+      - name: Rust clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  build:
+    name: Build Linux bundles
+    needs: test
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            file \
+            jq \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles
+        env:
+          NO_STRIP: "1"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --bundles appimage,deb,rpm
+
+      - name: Generate latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          APPIMAGES=(src-tauri/target/release/bundle/appimage/*.AppImage)
+
+          if [ ${#APPIMAGES[@]} -eq 0 ]; then
+            echo "No AppImage bundle was produced"
+            exit 1
+          fi
+
+          APPIMAGE_PATH="${APPIMAGES[0]}"
+          APPIMAGE_NAME=$(basename "$APPIMAGE_PATH")
+          SIG_CONTENT=$(tr -d '\n' < "${APPIMAGE_PATH}.sig")
+          NOTES=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="$TAG" --jq '.body')
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES" \
+            --arg pub_date "$PUB_DATE" \
+            --arg signature "$SIG_CONTENT" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${APPIMAGE_NAME}" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "linux-x86_64": {
+                  signature: $signature,
+                  url: $url
+                }
+              }
+            }' > latest.json
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-assets
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            latest.json
+          if-no-files-found: error
+
+  smoke-appimage:
+    name: Smoke test AppImage
+    needs: build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-assets
+          path: dist
+
+      - name: Extract AppImage
+        run: |
+          shopt -s nullglob
+          APPIMAGES=(dist/*.AppImage)
+
+          if [ ${#APPIMAGES[@]} -eq 0 ]; then
+            echo "No AppImage available for smoke test"
+            exit 1
+          fi
+
+          chmod +x "${APPIMAGES[0]}"
+          "${APPIMAGES[0]}" --appimage-extract >/dev/null
+
+  smoke-deb:
+    name: Smoke test Debian package
+    needs: build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-assets
+          path: dist
+
+      - name: Install Debian package
+        run: |
+          sudo dpkg -i dist/*.deb || sudo apt-get install -f -y
+          dpkg -s blinkly >/dev/null
+
+  smoke-rpm:
+    name: Smoke test RPM package
+    needs: build
+    runs-on: ubuntu-22.04
+    container: fedora:41
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-assets
+          path: dist
+
+      - name: Install RPM package
+        run: |
+          dnf install -y dist/*.rpm
+          rpm -q blinkly >/dev/null
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - build
+      - smoke-appimage
+      - smoke-deb
+      - smoke-rpm
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-assets
+          path: dist
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          TAG="${GITHUB_REF_NAME}"
+          ASSETS=(dist/*.AppImage dist/*.AppImage.sig dist/*.deb dist/*.rpm dist/latest.json)
+
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No assets available to publish"
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes "${ASSETS[@]}"
+          fi

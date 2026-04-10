@@ -131,8 +131,10 @@ mod tests {
     use crate::events::AppEvent;
 
     fn make(idle_secs: u64, threshold_secs: u64) -> (Arc<ActivityTracker>, Arc<EventBus>) {
-        let mut cfg = AppConfig::default();
-        cfg.idle_threshold_secs = threshold_secs;
+        let cfg = AppConfig {
+            idle_threshold_secs: threshold_secs,
+            ..AppConfig::default()
+        };
         let source = Arc::new(MockActivity::new(idle_secs));
         let bus = Arc::new(EventBus::new());
         let tracker = ActivityTracker::new(source, Arc::clone(&bus), cfg);
@@ -183,17 +185,25 @@ mod tests {
     #[tokio::test]
     async fn tracker_user_returned_after_idle() {
         time::pause();
-        let mut cfg = AppConfig::default();
-        cfg.idle_threshold_secs = 300;
+        let cfg = AppConfig {
+            idle_threshold_secs: 300,
+            ..AppConfig::default()
+        };
         let source = Arc::new(MockActivity::new(400)); // starts idle
         let bus = Arc::new(EventBus::new());
-        let _tracker = ActivityTracker::new(Arc::clone(&source) as Arc<dyn ActivitySource>, Arc::clone(&bus), cfg);
+        let _tracker = ActivityTracker::new(
+            Arc::clone(&source) as Arc<dyn ActivitySource>,
+            Arc::clone(&bus),
+            cfg,
+        );
         let mut rx = bus.subscribe();
 
         // First poll → UserIdle
         tokio::task::yield_now().await;
         time::advance(Duration::from_secs(31)).await;
-        for _ in 0..4 { tokio::task::yield_now().await; }
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
 
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, AppEvent::UserIdle { .. }));
@@ -203,7 +213,9 @@ mod tests {
 
         // Second poll → UserReturned
         time::advance(Duration::from_secs(31)).await;
-        for _ in 0..4 { tokio::task::yield_now().await; }
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
 
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, AppEvent::UserReturned));
@@ -219,7 +231,9 @@ mod tests {
         for _ in 0..2 {
             tokio::task::yield_now().await;
             time::advance(Duration::from_secs(31)).await;
-            for _ in 0..4 { tokio::task::yield_now().await; }
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
         }
 
         let ev = rx.recv().await.unwrap();

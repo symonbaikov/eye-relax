@@ -81,10 +81,7 @@ pub fn build_tray<R: Runtime>(
     Ok(tray)
 }
 
-fn build_menu<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &SchedulerState,
-) -> tauri::Result<Menu<R>> {
+fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &SchedulerState) -> tauri::Result<Menu<R>> {
     let pause_label = if *state == SchedulerState::Paused {
         "Resume"
     } else {
@@ -126,11 +123,7 @@ fn tooltip_for_state(state: &SchedulerState, remaining: u64) -> String {
 // Menu event handler
 // ---------------------------------------------------------------------------
 
-fn handle_menu_event<R: Runtime>(
-    app: &AppHandle<R>,
-    scheduler: &Arc<TimerScheduler>,
-    id: &str,
-) {
+fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, scheduler: &Arc<TimerScheduler>, id: &str) {
     use crate::scheduler::SchedulerPort;
 
     match id {
@@ -202,8 +195,7 @@ fn spawn_state_listener<R: Runtime>(
                 }
                 Ok(AppEvent::BreakTick { remaining_secs }) => {
                     if let Some(tray) = app.tray_by_id(&tray_id) {
-                        let tooltip =
-                            tooltip_for_state(&SchedulerState::OnBreak, remaining_secs);
+                        let tooltip = tooltip_for_state(&SchedulerState::OnBreak, remaining_secs);
                         let _ = tray.set_tooltip(Some(&tooltip));
                     }
                 }

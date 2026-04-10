@@ -48,9 +48,7 @@ impl ActivitySource for WaylandIdleSource {
         }
         // If D-Bus query fails (non-GNOME compositor), return 0 so the
         // scheduler keeps running rather than silently resetting.
-        tracing::warn!(
-            "WaylandIdleSource: could not query idle time, reporting 0s idle"
-        );
+        tracing::warn!("WaylandIdleSource: could not query idle time, reporting 0s idle");
         Ok(0)
     }
 
@@ -75,7 +73,13 @@ impl ActivitySource for WaylandIdleSource {
                 let locked: bool = body
                     .deserialize::<zbus::zvariant::Value>()
                     .ok()
-                    .and_then(|v| if let zbus::zvariant::Value::Bool(b) = v { Some(b) } else { None })
+                    .and_then(|v| {
+                        if let zbus::zvariant::Value::Bool(b) = v {
+                            Some(b)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(false);
                 Ok(locked)
             }

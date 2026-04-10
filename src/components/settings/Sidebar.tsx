@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useAppVersion } from "../../hooks/useAppVersion";
 
 export type Page = "general" | "timers" | "sound" | "appearance" | "statistics" | "about";
 
@@ -118,6 +119,8 @@ const navItems: NavItem[] = [
 ];
 
 export default function Sidebar({ active, onChange }: SidebarProps) {
+  const version = useAppVersion();
+
   return (
     <div className="w-[220px] shrink-0 bg-transparent flex flex-col h-full py-4 px-3">
       {/* Brand */}
@@ -152,7 +155,7 @@ export default function Sidebar({ active, onChange }: SidebarProps) {
 
       {/* Footer */}
       <div className="px-4 py-4">
-        <p className="text-xs font-bold text-gray-400">v0.1.0</p>
+        <p className="text-xs font-bold text-gray-400">v{version}</p>
       </div>
     </div>
   );

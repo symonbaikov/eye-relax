@@ -4,14 +4,15 @@ pub mod config;
 pub mod events;
 pub mod notifications;
 pub mod overlay;
-pub mod prompt;
 pub mod platform;
 pub mod power;
+pub mod prompt;
 pub mod scheduler;
 pub mod screen_lock;
 pub mod stats;
 pub mod storage;
 pub mod tray;
+pub mod updates;
 pub mod x11_grab;
 
 use std::sync::Arc;
@@ -64,7 +65,6 @@ where
     }
 }
 
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -91,6 +91,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             apply_window_icons(app.handle());
 
@@ -99,22 +101,15 @@ pub fn run() {
 
             // Activity Tracker
             use activity::ActivityTracker;
-            use platform::{SessionType, detect_session_type};
-            let activity_source: Arc<dyn platform::ActivitySource> =
-                match detect_session_type() {
-                    SessionType::Wayland => {
-                        Arc::new(platform::wayland::WaylandIdleSource::new())
-                    }
-                    SessionType::X11 => Arc::new(
-                        platform::x11::X11IdleSource::new()
-                            .expect("failed to connect to X11 display"),
-                    ),
-                };
-            let _activity_tracker = ActivityTracker::new(
-                activity_source,
-                Arc::clone(&bus),
-                config_manager.current(),
-            );
+            use platform::{detect_session_type, SessionType};
+            let activity_source: Arc<dyn platform::ActivitySource> = match detect_session_type() {
+                SessionType::Wayland => Arc::new(platform::wayland::WaylandIdleSource::new()),
+                SessionType::X11 => Arc::new(
+                    platform::x11::X11IdleSource::new().expect("failed to connect to X11 display"),
+                ),
+            };
+            let _activity_tracker =
+                ActivityTracker::new(activity_source, Arc::clone(&bus), config_manager.current());
 
             // Scheduler
             let scheduler = TimerScheduler::new(Arc::clone(&bus), config_manager.current());
@@ -124,21 +119,13 @@ pub fn run() {
             stats::spawn_stats_aggregator(Arc::clone(&storage), Arc::clone(&bus));
 
             // Notifications
-            use notifications::DbusNotifier;
-            let notifier: Arc<dyn notifications::NotificationPort> =
-                match DbusNotifier::new() {
-                    Ok(n) => {
-                        tracing::info!("Using DbusNotifier for system notifications");
-                        Arc::new(n)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "DbusNotifier unavailable ({e}), falling back to LibnotifyNotifier"
-                        );
-                        Arc::new(notifications::LibnotifyNotifier::new())
-                    }
-                };
+            let notifier = notifications::create_system_notifier();
             notifications::spawn_notification_listener(notifier, Arc::clone(&bus));
+
+            updates::spawn_update_checker(
+                app.handle().clone(),
+                notifications::create_system_notifier(),
+            );
 
             // Tray
             tray::build_tray(app.handle(), Arc::clone(&scheduler), Arc::clone(&bus))?;
@@ -193,6 +180,8 @@ pub fn run() {
             commands::suspend_system,
             commands::get_skip_allowance,
             commands::get_stats,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

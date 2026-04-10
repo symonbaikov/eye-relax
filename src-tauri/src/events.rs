@@ -31,25 +31,37 @@ pub enum AppEvent {
         remaining_secs: u64,
     },
     PreBreakPromptHidden,
-    BreakDue { break_type: BreakType },
+    BreakDue {
+        break_type: BreakType,
+    },
     BreakCompleted,
     BreakSkipped,
-    BreakDeferred { secs: u64 },
-    BreakSnoozed { secs: u64 },
+    BreakDeferred {
+        secs: u64,
+    },
+    BreakSnoozed {
+        secs: u64,
+    },
     StateChanged(SchedulerState),
 
     // Activity
-    UserIdle { idle_secs: u64 },
+    UserIdle {
+        idle_secs: u64,
+    },
     UserReturned,
 
     // Config
     ConfigUpdated(AppConfig),
 
     // Break countdown tick (sent every second during OnBreak)
-    BreakTick { remaining_secs: u64 },
+    BreakTick {
+        remaining_secs: u64,
+    },
 
     // Stats
-    SessionTick { work_secs: u64 },
+    SessionTick {
+        work_secs: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +159,9 @@ mod tests {
 
         // Emit more events than the buffer capacity: must not panic.
         for i in 0..(super::BUS_CAPACITY + 10) {
-            bus.emit(AppEvent::SessionTick { work_secs: i as u64 });
+            bus.emit(AppEvent::SessionTick {
+                work_secs: i as u64,
+            });
         }
         // If we reach here without panic, the test passes.
     }

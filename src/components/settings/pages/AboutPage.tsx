@@ -1,4 +1,8 @@
+import { useAppVersion } from "../../../hooks/useAppVersion";
+
 export default function AboutPage() {
+  const version = useAppVersion();
+
   return (
     <div className="space-y-6">
       <div>
@@ -9,7 +13,7 @@ export default function AboutPage() {
       <div className="bg-gray-50 rounded-xl p-5 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">Version</span>
-          <span className="text-sm font-medium text-gray-900">0.1.0</span>
+          <span className="text-sm font-medium text-gray-900">{version}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">Framework</span>

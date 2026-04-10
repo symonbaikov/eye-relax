@@ -57,7 +57,8 @@ pub fn spawn_overlay_listener<R: Runtime>(app: AppHandle<R>, bus: Arc<EventBus>)
 
                             for delay in [0_u64, 120, 350, 800, 1400] {
                                 if delay > 0 {
-                                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(delay))
+                                        .await;
                                 }
 
                                 let _ = window.set_focus();

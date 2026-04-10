@@ -55,14 +55,22 @@ pub fn spawn_prompt_listener<R: Runtime>(app: AppHandle<R>, bus: Arc<EventBus>) 
                 | Ok(AppEvent::BreakDeferred { .. })
                 | Ok(AppEvent::BreakSnoozed { .. }) => {
                     if let Some(window) = app.get_webview_window(PROMPT_LABEL) {
-                        let _ = app.emit_to(EventTarget::webview(PROMPT_LABEL), "pre-break-prompt-hide", ());
+                        let _ = app.emit_to(
+                            EventTarget::webview(PROMPT_LABEL),
+                            "pre-break-prompt-hide",
+                            (),
+                        );
                         let _ = window.hide();
                     }
                 }
                 Ok(AppEvent::StateChanged(crate::events::SchedulerState::Idle))
                 | Ok(AppEvent::StateChanged(crate::events::SchedulerState::Paused)) => {
                     if let Some(window) = app.get_webview_window(PROMPT_LABEL) {
-                        let _ = app.emit_to(EventTarget::webview(PROMPT_LABEL), "pre-break-prompt-hide", ());
+                        let _ = app.emit_to(
+                            EventTarget::webview(PROMPT_LABEL),
+                            "pre-break-prompt-hide",
+                            (),
+                        );
                         let _ = window.hide();
                     }
                 }
@@ -77,7 +85,9 @@ pub fn spawn_prompt_listener<R: Runtime>(app: AppHandle<R>, bus: Arc<EventBus>) 
 }
 
 fn position_prompt_window<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
-    let monitor = window.current_monitor()?.or_else(|| window.primary_monitor().ok().flatten());
+    let monitor = window
+        .current_monitor()?
+        .or_else(|| window.primary_monitor().ok().flatten());
 
     if let Some(monitor) = monitor {
         let position = monitor.position();

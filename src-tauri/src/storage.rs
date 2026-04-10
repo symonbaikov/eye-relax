@@ -294,6 +294,12 @@ pub mod mock {
         pub breaks: Mutex<HashMap<String, BreakRecord>>, // id → BreakRecord
     }
 
+    impl Default for MockStorage {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockStorage {
         pub fn new() -> Self {
             MockStorage {
@@ -399,8 +405,10 @@ mod tests {
 
         let storage = SqliteStorage::new(&db).unwrap();
 
-        let mut cfg = AppConfig::default();
-        cfg.work_interval_secs = 600;
+        let cfg = AppConfig {
+            work_interval_secs: 600,
+            ..AppConfig::default()
+        };
         storage.save_config(&cfg).unwrap();
 
         // Re-open the same file to simulate restart

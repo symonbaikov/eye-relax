@@ -217,7 +217,9 @@ impl TimerScheduler {
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 inner_t.lock().unwrap().remaining_secs = remaining;
-                bus_t.emit(AppEvent::BreakTick { remaining_secs: remaining });
+                bus_t.emit(AppEvent::BreakTick {
+                    remaining_secs: remaining,
+                });
             }
             if cancel_t.load(Ordering::Relaxed) {
                 return;
@@ -315,7 +317,10 @@ impl TimerScheduler {
             // --- Transition to break ---
             let (break_type, break_secs) = {
                 let mut g = inner_t.lock().unwrap();
-                let bt = g.pending_break_type.clone().unwrap_or_else(|| g.next_break_type());
+                let bt = g
+                    .pending_break_type
+                    .clone()
+                    .unwrap_or_else(|| g.next_break_type());
                 g.work_cycles += 1;
                 let secs = g.break_duration(&bt);
                 g.state = SchedulerState::OnBreak;
@@ -378,7 +383,8 @@ impl SchedulerPort for TimerScheduler {
         }
 
         Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
-        self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
+        self.bus
+            .emit(AppEvent::StateChanged(SchedulerState::Working));
         Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, secs);
     }
 
@@ -413,7 +419,8 @@ impl SchedulerPort for TimerScheduler {
             g.pending_break_type = None;
         }
         Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
-        self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
+        self.bus
+            .emit(AppEvent::StateChanged(SchedulerState::Working));
         Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, secs);
     }
 
@@ -429,7 +436,8 @@ impl SchedulerPort for TimerScheduler {
         tracing::info!("State transition: Working → Paused");
         Self::hide_prompt(&self.bus, &self.prompt_remaining_secs);
         self.inner.lock().unwrap().pending_break_type = None;
-        self.bus.emit(AppEvent::StateChanged(SchedulerState::Paused));
+        self.bus
+            .emit(AppEvent::StateChanged(SchedulerState::Paused));
     }
 
     /// Resume from Paused. No-op if not Paused.
@@ -448,8 +456,14 @@ impl SchedulerPort for TimerScheduler {
             g.pending_break_type = None;
         }
         tracing::info!("State transition: Paused → Working");
-        self.bus.emit(AppEvent::StateChanged(SchedulerState::Working));
-        Self::spawn_work_task(&self.inner, &self.bus, &self.prompt_remaining_secs, remaining);
+        self.bus
+            .emit(AppEvent::StateChanged(SchedulerState::Working));
+        Self::spawn_work_task(
+            &self.inner,
+            &self.bus,
+            &self.prompt_remaining_secs,
+            remaining,
+        );
     }
 
     fn state(&self) -> SchedulerState {
@@ -475,7 +489,7 @@ mod tests {
         AppConfig {
             work_interval_secs: 4,
             break_duration_secs: 2,
-            long_break_interval_secs: 8,  // every 2 work cycles
+            long_break_interval_secs: 8, // every 2 work cycles
             long_break_duration_secs: 4,
             snooze_duration_secs: 3,
             idle_threshold_secs: 300,
@@ -596,7 +610,10 @@ mod tests {
 
         // Consume StateChanged(Working)
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert!(matches!(
+            ev,
+            AppEvent::StateChanged(SchedulerState::Working)
+        ));
 
         // Advance past the 4s work interval
         time::advance(Duration::from_secs(5)).await;
@@ -636,7 +653,10 @@ mod tests {
 
         // Should now be back to Working
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert!(matches!(
+            ev,
+            AppEvent::StateChanged(SchedulerState::Working)
+        ));
         assert_eq!(sched.state(), SchedulerState::Working);
     }
 
@@ -672,7 +692,10 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, AppEvent::BreakSkipped));
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert!(matches!(
+            ev,
+            AppEvent::StateChanged(SchedulerState::Working)
+        ));
     }
 
     #[tokio::test]
@@ -706,7 +729,10 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, AppEvent::BreakSnoozed { secs: 3 }));
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert!(matches!(
+            ev,
+            AppEvent::StateChanged(SchedulerState::Working)
+        ));
     }
 
     #[tokio::test]
@@ -766,7 +792,9 @@ mod tests {
         tokio::task::yield_now().await;
         loop {
             let ev = rx.recv().await.unwrap();
-            if matches!(ev, AppEvent::BreakCompleted) { break; }
+            if matches!(ev, AppEvent::BreakCompleted) {
+                break;
+            }
         }
         rx.recv().await.unwrap(); // StateChanged(Working)
 
@@ -831,7 +859,10 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, AppEvent::PreBreakPromptHidden));
         let ev = rx.recv().await.unwrap();
-        assert!(matches!(ev, AppEvent::StateChanged(SchedulerState::Working)));
+        assert!(matches!(
+            ev,
+            AppEvent::StateChanged(SchedulerState::Working)
+        ));
         assert_eq!(sched.remaining_secs(), 60);
     }
 }

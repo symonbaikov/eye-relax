@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "blinkly",
   "version": "0.1.0",
-  "identifier": "com.blinkly.app",
+  "identifier": "com.blinkly.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -65,7 +65,24 @@
   },
   "bundle": {
     "active": true,
+    "category": "Utility",
+    "createUpdaterArtifacts": true,
+    "license": "MIT",
+    "shortDescription": "Gentle eye-break reminders built for Linux desktops.",
+    "longDescription": "Blinkly is a tray-first eye-break reminder for Linux that follows the 20-20-20 rule. It uses soft overlays, native notifications, idle detection, and lightweight settings so regular breaks feel helpful instead of disruptive.",
+    "licenseFile": "../LICENSE",
+    "publisher": "Symon Baikov",
+    "homepage": "https://github.com/symonbaikov/eye-relax",
     "targets": "all",
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "priority": "optional"
+      },
+      "rpm": {
+        "release": "1"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -74,5 +91,11 @@
       "icons/icon.ico",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGREY0NjdBNzQ3QjBCRApSV1M5c0VlblovVDlBUkcxM2hUVmtvS3RIVEZyNzlXOXNPUk5va3g2Y3lrK1NjbTVQTVFobjlwVwo=",
+      "endpoints": ["https://github.com/symonbaikov/eye-relax/releases/latest/download/latest.json"]
+    }
   }
 }

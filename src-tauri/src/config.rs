@@ -33,7 +33,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
-            work_interval_secs: 1200,       // 20 min
+            work_interval_secs: 1200, // 20 min
             break_duration_secs: 20,
             long_break_interval_secs: 3600, // 60 min
             long_break_duration_secs: 300,  // 5 min
@@ -88,10 +88,14 @@ impl AppConfig {
             return Err(ConfigError::BreakDuration(self.break_duration_secs));
         }
         if !(1800..=7200).contains(&self.long_break_interval_secs) {
-            return Err(ConfigError::LongBreakInterval(self.long_break_interval_secs));
+            return Err(ConfigError::LongBreakInterval(
+                self.long_break_interval_secs,
+            ));
         }
         if !(120..=900).contains(&self.long_break_duration_secs) {
-            return Err(ConfigError::LongBreakDuration(self.long_break_duration_secs));
+            return Err(ConfigError::LongBreakDuration(
+                self.long_break_duration_secs,
+            ));
         }
         if !(60..=600).contains(&self.snooze_duration_secs) {
             return Err(ConfigError::SnoozeDuration(self.snooze_duration_secs));
@@ -271,7 +275,10 @@ mod tests {
     fn config_snooze_above_max_rejected() {
         let mut c = valid();
         c.snooze_duration_secs = 601;
-        assert!(matches!(c.validate(), Err(ConfigError::SnoozeDuration(601))));
+        assert!(matches!(
+            c.validate(),
+            Err(ConfigError::SnoozeDuration(601))
+        ));
     }
 
     // --- idle_threshold_secs ---

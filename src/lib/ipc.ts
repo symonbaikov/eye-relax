@@ -39,6 +39,13 @@ export interface SkipAllowance {
   limit: number;
 }
 
+export interface UpdateInfo {
+  version: string;
+  notes: string;
+  pubDate: string;
+  installType: "appimage" | "system_pkg";
+}
+
 export const getState = (): Promise<SchedulerState> => invoke<SchedulerState>("get_state");
 
 export const getRemaining = (): Promise<number> => invoke<number>("get_remaining");
@@ -61,6 +68,11 @@ export const resumeTimer = (): Promise<void> => invoke<void>("resume_timer");
 export const lockScreen = (): Promise<void> => invoke<void>("lock_screen");
 
 export const suspendSystem = (): Promise<void> => invoke<void>("suspend_system");
+
+export const checkForUpdate = (): Promise<UpdateInfo | null> =>
+  invoke<UpdateInfo | null>("check_for_update");
+
+export const installUpdate = (): Promise<void> => invoke<void>("install_update");
 
 // ---------------------------------------------------------------------------
 // Stats commands

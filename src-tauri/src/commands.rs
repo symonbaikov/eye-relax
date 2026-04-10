@@ -9,6 +9,7 @@ use crate::power;
 use crate::scheduler::{SchedulerPort, TimerScheduler};
 use crate::screen_lock;
 use crate::storage::{DateRange, DayStat, StoragePort};
+use crate::updates;
 
 const MAX_DAILY_SKIPS: u32 = 4;
 
@@ -150,4 +151,20 @@ pub fn get_stats(
     storage: State<Arc<dyn StoragePort>>,
 ) -> IpcResult<Vec<DayStat>> {
     storage.get_stats(&range).map_err(IpcError::from)
+}
+
+#[tauri::command]
+pub async fn check_for_update(
+    app_handle: tauri::AppHandle,
+) -> IpcResult<Option<updates::UpdateInfo>> {
+    updates::check_for_update(&app_handle)
+        .await
+        .map_err(IpcError::from)
+}
+
+#[tauri::command]
+pub async fn install_update(app_handle: tauri::AppHandle) -> IpcResult<()> {
+    updates::install_update(&app_handle)
+        .await
+        .map_err(IpcError::from)
 }

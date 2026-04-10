@@ -37,21 +37,21 @@ Blinkly is a **Linux-first** application, built and tested on modern desktop env
 
 ### Operating systems
 
-| Distribution | Status |
-|---|---|
-| Ubuntu 22.04 / 24.04 LTS | ✅ Supported |
-| Fedora 39+ | ✅ Supported |
-| Arch Linux (rolling) | ✅ Supported |
-| Debian 12+ | ✅ Supported |
-| openSUSE Tumbleweed | ✅ Should work |
+| Distribution             | Status         |
+| ------------------------ | -------------- |
+| Ubuntu 22.04 / 24.04 LTS | ✅ Supported   |
+| Fedora 39+               | ✅ Supported   |
+| Arch Linux (rolling)     | ✅ Supported   |
+| Debian 12+               | ✅ Supported   |
+| openSUSE Tumbleweed      | ✅ Should work |
 
 ### Desktop environments
 
-| DE | Wayland | X11 |
-|---|---|---|
-| GNOME 45+ | ✅ Primary target | ✅ Supported |
-| KDE Plasma 6+ | ✅ Supported | ✅ Supported |
-| Other DEs with system tray | ⚠️ May work | ✅ Should work |
+| DE                         | Wayland           | X11            |
+| -------------------------- | ----------------- | -------------- |
+| GNOME 45+                  | ✅ Primary target | ✅ Supported   |
+| KDE Plasma 6+              | ✅ Supported      | ✅ Supported   |
+| Other DEs with system tray | ⚠️ May work       | ✅ Should work |
 
 ### Display servers
 
@@ -60,13 +60,13 @@ Blinkly is a **Linux-first** application, built and tested on modern desktop env
 
 ### System requirements
 
-| Component | Minimum |
-|---|---|
-| Kernel | Linux 5.15+ |
-| glibc | 2.31+ |
-| RAM | 128 MB free |
-| Disk | 50 MB |
-| Runtime | `libwebkit2gtk-4.1`, `libgtk-3`, D-Bus session bus |
+| Component | Minimum                                            |
+| --------- | -------------------------------------------------- |
+| Kernel    | Linux 5.15+                                        |
+| glibc     | 2.31+                                              |
+| RAM       | 128 MB free                                        |
+| Disk      | 50 MB                                              |
+| Runtime   | `libwebkit2gtk-4.1`, `libgtk-3`, D-Bus session bus |
 
 > **macOS and Windows** are not supported in v1.0 — they are planned for v2.0.
 
@@ -74,25 +74,46 @@ Blinkly is a **Linux-first** application, built and tested on modern desktop env
 
 ## 📦 Installation
 
+Download all Linux builds from the [GitHub Releases page](https://github.com/symonbaikov/eye-relax/releases).
+
+| Your system                  | What to download | Notes                  |
+| ---------------------------- | ---------------- | ---------------------- |
+| Ubuntu / Debian              | `.deb`           | Native package install |
+| Fedora                       | `.rpm`           | Native package install |
+| Not sure / want auto-updates | `AppImage`       | Recommended fallback   |
+
 ### AppImage (recommended)
 
+AppImage is the easiest portable build and the only Linux format that supports Blinkly's in-place auto-updates.
+
 ```bash
-# Download the latest AppImage from the releases page
-chmod +x Blinkly-x86_64.AppImage
-./Blinkly-x86_64.AppImage
+chmod +x blinkly_0.1.0_amd64.AppImage
+./blinkly_0.1.0_amd64.AppImage
 ```
 
-### Debian / Ubuntu
+If FUSE is unavailable on your system, use the extraction fallback:
+
+```bash
+./blinkly_0.1.0_amd64.AppImage --appimage-extract-and-run
+```
+
+### Ubuntu / Debian
 
 ```bash
 sudo dpkg -i blinkly_0.1.0_amd64.deb
+sudo apt-get install -f
 ```
 
-### Arch Linux
+### Fedora
 
 ```bash
-# Coming soon to AUR
+sudo dnf install ./blinkly-0.1.0-1.x86_64.rpm
 ```
+
+### Updates
+
+- `AppImage` users get automatic in-place updates from within Blinkly.
+- `.deb` and `.rpm` users get a native notification plus a download prompt in Settings that opens the latest release page.
 
 ---
 
@@ -132,18 +153,33 @@ npm run tauri dev
 ### Build a release
 
 ```bash
-npm run tauri build
+npm ci
+npm run tauri build -- --bundles appimage,deb,rpm
 ```
 
 Artifacts end up in `src-tauri/target/release/bundle/`.
+
+If you want updater signatures locally, export your signing key first:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/blinkly.key")"
+npm run tauri build -- --bundles appimage,deb,rpm
+```
+
+On newer Fedora-like systems, AppImage bundling may also need `NO_STRIP=1` because the cached `linuxdeploy` tool can choke on modern `.relr.dyn` sections:
+
+```bash
+NO_STRIP=1 npm run tauri build -- --bundles appimage,deb,rpm
+```
 
 ### Quality gates
 
 ```bash
 cargo clippy -- -D warnings
-cargo test
+npm run build
 npm run lint
 npm run typecheck
+cargo test --all-targets
 ```
 
 ---

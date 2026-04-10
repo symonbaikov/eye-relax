@@ -2,9 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for all app windows",
-  "windows": ["overlay", "settings"],
-  "permissions": [
-    "core:default",
-    "opener:default"
-  ]
+  "windows": ["overlay", "prompt", "settings"],
+  "permissions": ["core:default", "opener:default", "updater:default", "process:default"]
 }

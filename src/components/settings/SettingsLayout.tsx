@@ -7,6 +7,7 @@ import SoundPage from "./pages/SoundPage";
 import AppearancePage from "./pages/AppearancePage";
 import StatsPage from "./pages/StatsPage";
 import AboutPage from "./pages/AboutPage";
+import UpdateBanner from "./UpdateBanner";
 
 const pagesWithSave = new Set<Page>(["timers", "sound", "appearance"]);
 
@@ -52,6 +53,7 @@ export default function SettingsLayout() {
       <div className="flex-1 flex flex-col min-w-0 bg-white/60 backdrop-blur-3xl shadow-[0_0_40px_-10px_rgba(0,0,0,0.1)] rounded-l-[2.5rem] border-l border-white/60 my-2 mr-2 overflow-hidden">
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-8">
+          <UpdateBanner />
           {renderPage()}
 
           {error && (
