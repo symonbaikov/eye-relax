@@ -16,6 +16,7 @@ Desktop companion that nudges you away from the screen with soft overlays, follo
 </div>
 
 ---
+<img width="1920" height="1080" alt="Screenshot From 2026-04-10 22-50-19" src="https://github.com/user-attachments/assets/ea29f25a-51f7-4cf8-8455-50913efe583a" />
 
 ## ✨ Features
 
