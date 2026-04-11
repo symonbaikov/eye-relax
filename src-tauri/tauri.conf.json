@@ -94,7 +94,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGREY0NjdBNzQ3QjBCRApSV1M5c0VlblovVDlBUkcxM2hUVmtvS3RIVEZyNzlXOXNPUk5va3g2Y3lrK1NjbTVQTVFobjlwVwo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgzMUU0NTgzQzYyQ0NGNTcKUldSWHp5ekdnMFVlZzNIOW1YWCs3WGoyaGNRQWtEdUUzVFNpdDF0UVBGVC94L2IxNmNlZkUzOTEK",
       "endpoints": ["https://github.com/symonbaikov/eye-relax/releases/latest/download/latest.json"]
     }
   }
